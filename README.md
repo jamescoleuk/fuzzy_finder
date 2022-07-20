@@ -11,6 +11,8 @@ It comes with a Lord of the Rings example, which you can run like this:
 cargo run --example lotr
 ```
 
+The design owes a great debt to the wonderful [fzf](https://github.com/junegunn/fzf).
+
 ## History
 
-`fuzzy_finder` was developed for (lk)[https://github.com/jamescoleuk/lk].
+`fuzzy_finder` was developed for [lk](https://github.com/jamescoleuk/lk).
