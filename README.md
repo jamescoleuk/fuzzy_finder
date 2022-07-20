@@ -15,4 +15,4 @@ The design owes a great debt to the wonderful [fzf](https://github.com/junegunn/
 
 ## History
 
-`fuzzy_finder` was developed for [lk](https://github.com/jamescoleuk/lk).
+`fuzzy_finder` was developed for [lk](https://github.com/jamescoleuk/lk), a CLI front-end for bash scripts.
