@@ -1,7 +1,9 @@
 [package]
 authors = ["James Cole <jamescole.uk@gmail.com>"]
+categories = ["command-line-interface", "command-line-utilities"]
 description = "A fuzzy finding UI for CLI applications written in Rust"
 edition = "2021"
+keywords = ["bash", "cli"]
 license = "MIT OR Apache-2.0"
 name = "fuzzy_finder"
 repository = "https://github.com/jamescoleuk/fuzzy_finder"

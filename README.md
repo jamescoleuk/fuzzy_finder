@@ -1,5 +1,7 @@
 # fuzzy_finder
 
+[![Crates.io](https://img.shields.io/crates/v/fuzzy_finder.svg)](https://crates.io/crates/fuzzy_finder)
+
 `fuzzy_finder` is a fuzzy finding UI for Rust CLI applications. 
 
 Does your application have a big list of things your users want to search through? If so you might find this library helpful. It looks like this:
