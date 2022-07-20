@@ -17,7 +17,6 @@ use termion::raw::{IntoRawMode, RawTerminal};
 
 pub mod item;
 mod list;
-// TODO: search for ui_state and rename the stupid thing. Same with View.
 
 pub struct FuzzyFinder<T>
 where
