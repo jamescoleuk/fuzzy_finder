@@ -14,7 +14,7 @@ cargo run --example lotr
 ```
 
 Here's a little demo:
-[![asciicast](https://asciinema.org/a/kXov19ul80aSRmMLgWrleHkL9.png)](https://asciinema.org/a/kXov19ul80aSRmMLgWrleHkL9)
+<script src="https://asciinema.org/a/kXov19ul80aSRmMLgWrleHkL9.js" id="asciicast-kXov19ul80aSRmMLgWrleHkL9" async></script>
 
 The design owes a great debt to the wonderful [fzf](https://github.com/junegunn/fzf).
 
