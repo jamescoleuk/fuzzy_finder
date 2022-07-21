@@ -13,6 +13,9 @@ It comes with a Lord of the Rings example, which you can run like this:
 cargo run --example lotr
 ```
 
+Here's a little demo:
+[![asciicast](https://asciinema.org/a/kXov19ul80aSRmMLgWrleHkL9.png)](https://asciinema.org/a/kXov19ul80aSRmMLgWrleHkL9)
+
 The design owes a great debt to the wonderful [fzf](https://github.com/junegunn/fzf).
 
 ## History
