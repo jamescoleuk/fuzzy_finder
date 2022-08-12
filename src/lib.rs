@@ -315,9 +315,10 @@ fn get_coloured_line(fuzzy_indecies: &[usize], text: &str, is_selected: bool) ->
     let mut coloured_line = String::from("");
     let mut start = 0;
 
+    let text_vec = text.chars().collect::<Vec<_>>();
     for i in fuzzy_indecies {
-        let part = &text[start..*i];
-        let matching_char = &text[*i..*i + 1];
+        let part = &text_vec[start..*i].iter().cloned().collect::<String>();
+        let matching_char = &text_vec[*i..*i + 1].iter().cloned().collect::<String>();
         if is_selected {
             coloured_line = format!(
                 "{coloured_line}{DARK_GREY_BG}{part}{RESET_BG}{DARK_BLUE_BG}{matching_char}{RESET_BG}"
@@ -327,7 +328,10 @@ fn get_coloured_line(fuzzy_indecies: &[usize], text: &str, is_selected: bool) ->
         }
         start = i + 1;
     }
-    let remaining_chars = &text[start..text.chars().count()];
+    let remaining_chars = &text_vec[start..text.chars().count()]
+        .iter()
+        .cloned()
+        .collect::<String>();
     if is_selected {
         let prompt: String = format!("{DARK_GREY_BG}{GREEN_FG}>{RESET_FG}{RESET_BG}",);
         let spacer: String = format!("{DARK_GREY_FG}  {RESET_FG}");
