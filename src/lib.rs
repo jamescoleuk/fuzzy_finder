@@ -28,7 +28,7 @@ where
     console_offset: u16,
     stdout: RawTerminal<Stdout>,
     first: bool,
-    list: List<T>,
+    list: List<Item<T>>,
     positive_space_remaining: u16,
 }
 
@@ -68,13 +68,13 @@ where
             console_offset,
             stdout,
             first: true,
-            list: List::new(lines_to_show),
+            list: List::new(lines_to_show as usize),
             positive_space_remaining,
         }
     }
 
     pub fn up(&mut self) -> Result<()> {
-        self.list.up(&self.matches);
+        self.list.up();
         self.update_matches();
         self.render()
     }
@@ -111,7 +111,7 @@ where
         // this run of lk.
         write!(self.stdout, "{}", termion::cursor::Save).unwrap();
         if self.first {
-            for _ in 0..self.list.lines_to_show {
+            for _ in 0..self.list.capacity() {
                 writeln!(self.stdout, " ")?;
             }
             self.first = false
@@ -132,35 +132,32 @@ where
 
     fn render_items(&mut self) -> Result<()> {
         self.goto_start()?;
-        for (index, item) in self.list.items.iter().enumerate() {
-            if item.is_blank {
-                writeln!(self.stdout, "{}", termion::clear::CurrentLine)?;
-            } else {
-                let fuzzy_indecies = &item.score.as_ref().unwrap().1;
+        // render blank space
+        let num_blank = self.list.capacity() - self.list.len();
+        for _ in 0..num_blank {
+            writeln!(self.stdout, "{}", termion::clear::CurrentLine)?;
+        }
+        for (is_selected, item) in self.list.tagged_iter() {
+            let fuzzy_indecies = &item.score.as_ref().unwrap().1;
 
-                // Do some string manipulation to colourise the indexed parts
-                let coloured_line = get_coloured_line(
-                    fuzzy_indecies,
-                    &item.name,
-                    index == self.list.selected_index as usize,
-                );
+            // Do some string manipulation to colourise the indexed parts
+            let coloured_line = get_coloured_line(fuzzy_indecies, &item.name, is_selected);
 
-                writeln!(
-                    self.stdout,
-                    "{}{}{}",
-                    termion::clear::CurrentLine,
-                    // Go maximum left, so we're at the start of the line
-                    termion::cursor::Left(1000),
-                    coloured_line
-                )?;
-            }
+            writeln!(
+                self.stdout,
+                "{}{}{}",
+                termion::clear::CurrentLine,
+                // Go maximum left, so we're at the start of the line
+                termion::cursor::Left(1000),
+                coloured_line
+            )?;
         }
         Ok(())
     }
 
     fn render_prompt(&mut self) -> Result<()> {
         // Render the prompt
-        let prompt_y = self.list.lines_to_show as u16 + 1;
+        let prompt_y = self.list.capacity() as u16 + 1;
         let current_x = self.search_term.chars().count() + 2;
 
         // Go to the bottom line, where we'll render the prompt
@@ -173,7 +170,7 @@ where
             self.stdout,
             "{Show}{}{BLUE_FG}${RESET_FG} {}",
             termion::cursor::Goto(1, prompt_y + self.console_offset),
-            self.search_term
+            self.search_term,
         )?;
         self.stdout.flush()?;
         Ok(())
@@ -254,7 +251,7 @@ where
                         return if !state.matches.is_empty() {
                             // Tidy up the console lines we've been writing
                             for _ in state.console_offset
-                                ..state.console_offset + state.list.lines_to_show as u16 + 4
+                                ..state.console_offset + state.list.capacity() as u16 + 4
                             {
                                 write!(state.stdout, "{}", termion::clear::CurrentLine,)?;
                             }
