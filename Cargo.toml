@@ -7,7 +7,7 @@ keywords = ["bash", "cli"]
 license = "MIT OR Apache-2.0"
 name = "fuzzy_finder"
 repository = "https://github.com/jamescoleuk/fuzzy_finder"
-version = "0.1.2"
+version = "0.3.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
