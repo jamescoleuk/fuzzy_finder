@@ -60,9 +60,7 @@ where
         let index_of_first_blank = self.items.iter().rev().position(|item| item.is_blank);
         if let Some(rev_index) = index_of_first_blank {
             let index = self.lines_to_show - rev_index as i8;
-            if self.selected_index < index as i8 {
-                self.selected_index = index
-            }
+            self.selected_index = index
         }
     }
 
