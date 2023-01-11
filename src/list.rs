@@ -60,7 +60,15 @@ where
         let index_of_first_blank = self.items.iter().rev().position(|item| item.is_blank);
         if let Some(rev_index) = index_of_first_blank {
             let index = self.lines_to_show - rev_index as i8;
-            self.selected_index = index
+            // This first condition handles the scenario where the user is trying to go up on a short list
+            if self.selected_index < index as i8 && index < self.lines_to_show {
+                self.selected_index = index;
+            }
+            // This second condition handles the scenario where the list was empty, but the user deleted
+            // some text and now we need to create a selection again.
+            else if self.selected_index < index as i8 {
+                self.selected_index = index - 1;
+            }
         }
     }
 
