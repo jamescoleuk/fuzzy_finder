@@ -86,6 +86,7 @@ where
     }
 
     pub fn append(&mut self, c: char) -> Result<()> {
+        self.list.reset_selection();
         // This is a normal key that we want to add to the search.
         self.search_term = format!("{}{}", self.search_term, c);
 
@@ -94,6 +95,7 @@ where
     }
 
     pub fn backspace(&mut self) -> Result<()> {
+        self.list.reset_selection();
         if self.search_term.chars().count() > 0 {
             self.search_term =
                 String::from(&self.search_term[..self.search_term.chars().count() - 1]);

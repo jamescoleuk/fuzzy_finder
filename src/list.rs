@@ -56,10 +56,18 @@ where
         self.floor_selected_index();
     }
 
+    // Moves the selection to the bottom of the list.
+    pub fn reset_selection(&mut self) {
+        self.top_index = self.lines_to_show as u8 - 1;
+        self.bottom_index = 0;
+        self.selected_index = self.lines_to_show - 1;
+    }
+
     fn floor_selected_index(&mut self) {
         let index_of_first_blank = self.items.iter().rev().position(|item| item.is_blank);
         if let Some(rev_index) = index_of_first_blank {
             let index = self.lines_to_show - rev_index as i8;
+
             // This first condition handles the scenario where the user is trying to go up on a short list
             if self.selected_index < index as i8 && index < self.lines_to_show {
                 self.selected_index = index;
