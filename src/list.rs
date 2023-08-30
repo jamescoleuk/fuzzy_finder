@@ -20,7 +20,7 @@ where
         List {
             items: vec![],
             top_index: lines_to_show as u8 - 1,
-            selected_index: (lines_to_show - 1) as i8,
+            selected_index: (lines_to_show - 1),
             lines_to_show,
             bottom_index: 0,
         }
@@ -69,12 +69,12 @@ where
             let index = self.lines_to_show - rev_index as i8;
 
             // This first condition handles the scenario where the user is trying to go up on a short list
-            if self.selected_index < index as i8 && index < self.lines_to_show {
+            if self.selected_index < index && index < self.lines_to_show {
                 self.selected_index = index;
             }
             // This second condition handles the scenario where the list was empty, but the user deleted
             // some text and now we need to create a selection again.
-            else if self.selected_index < index as i8 {
+            else if self.selected_index < index {
                 self.selected_index = index - 1;
             }
         }
