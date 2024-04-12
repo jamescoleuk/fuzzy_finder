@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     let log_file_path = "./lotr_example.log".to_string();
     let log_file = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
-        .build(&log_file_path)?;
+        .build(log_file_path)?;
     let config = log4rs::config::Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(log_file)))
         .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
