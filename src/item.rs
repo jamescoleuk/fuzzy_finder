@@ -1,6 +1,6 @@
 /// An Item in the list the user sees when searching.
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Item<T>
 where
     T: Clone,

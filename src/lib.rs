@@ -1,22 +1,46 @@
-use anyhow::Result;
-use fuzzy_matcher::skim::SkimMatcherV2;
+use crossterm::cursor::{self, MoveTo, MoveToColumn, Show};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::{QueueableCommand, terminal};
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use item::Item;
 use list::List;
 use pastel_colours::{
     BLUE_FG, DARK_BLUE_BG, DARK_GREY_BG, DARK_GREY_FG, GREEN_FG, RESET_BG, RESET_FG,
 };
-use std::io::{stdout, Stdout, Write};
-use std::time::Instant;
-use termion::clear::CurrentLine;
-use termion::cursor::DetectCursorPos;
-use termion::cursor::Show;
-use termion::event::Key;
-use termion::input::TermRead;
-use termion::raw::{IntoRawMode, RawTerminal};
+use std::io::{Stdout, Write, stdout};
 
 pub mod item;
 mod list;
+
+/// The error type for fuzzy_finder. Everything the terminal does
+/// surfaces as I/O errors, but having our own type means we can
+/// extend it without breaking callers.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("terminal error: {0}")]
+    Terminal(#[from] std::io::Error),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Puts the terminal into raw mode, and guarantees it's restored when
+/// dropped — including on error paths and panics.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> Result<Self> {
+        enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
 
 pub struct FuzzyFinder<T>
 where
@@ -25,302 +49,224 @@ where
     search_term: String,
     all_items: Vec<Item<T>>,
     matches: Vec<Item<T>>,
-    console_offset: u16,
-    stdout: RawTerminal<Stdout>,
+    /// The 0-based terminal row where the list starts rendering.
+    start_row: u16,
+    stdout: Stdout,
     first: bool,
     list: List<T>,
-    positive_space_remaining: u16,
 }
 
 impl<T> FuzzyFinder<T>
 where
     T: Clone,
 {
-    fn new(functions: Vec<Item<T>>, lines_to_show: i8) -> Self {
-        // We need to know where to start rendering from. We can't do this later because
-        // we overwrite the cursor. Maybe we shouldn't do this? (TODO)
-        let mut stdout = stdout().into_raw_mode().unwrap();
+    fn new(items: Vec<Item<T>>, lines_to_show: u16) -> Result<Self> {
+        let stdout = stdout();
 
-        write!(stdout, "{}", termion::cursor::Save).unwrap();
-        let mut positive_space_remaining = 0;
-        let console_offset = if stdout.cursor_pos().is_ok() {
-            let cursor_pos_y = stdout.cursor_pos().unwrap().1;
-
-            let terminal_height = termion::terminal_size().unwrap().1;
-            let starting_y = cursor_pos_y;
-            let ending_y = starting_y + lines_to_show as u16;
-            let space_remaining: i16 = terminal_height as i16 - ending_y as i16;
-            positive_space_remaining = if space_remaining < 0 {
-                space_remaining.abs().try_into().unwrap()
-            } else {
+        // We need to know where to start rendering from. If the list would
+        // overflow the bottom of the terminal then the initial padding
+        // (see `render_space`) will scroll everything up, so account for that.
+        let cursor_row = match cursor::position() {
+            Ok((_, row)) => row,
+            Err(err) => {
+                log::error!("Cannot get cursor position, assuming top of screen: {err}");
                 0
-            };
-            cursor_pos_y
-        } else {
-            log::error!("Cannot get cursor!");
-            0
+            }
         };
+        let (_, terminal_height) = terminal::size()?;
+        let overflow = (cursor_row + 1 + lines_to_show).saturating_sub(terminal_height);
+        let start_row = cursor_row.saturating_sub(overflow);
 
-        FuzzyFinder {
-            search_term: String::from(""),
-            all_items: functions,
+        Ok(FuzzyFinder {
+            search_term: String::new(),
+            all_items: items,
             matches: vec![],
-            console_offset,
+            start_row,
             stdout,
             first: true,
-            list: List::new(lines_to_show),
-            positive_space_remaining,
-        }
+            list: List::new(lines_to_show as usize),
+        })
     }
 
-    pub fn up(&mut self) -> Result<()> {
+    fn up(&mut self) -> Result<()> {
         self.list.up(&self.matches);
         self.update_matches();
         self.render()
     }
 
-    pub fn down(&mut self) -> Result<()> {
+    fn down(&mut self) -> Result<()> {
         self.list.down();
         self.update_matches();
         self.render()
     }
 
-    pub fn append(&mut self, c: char) -> Result<()> {
+    fn append(&mut self, c: char) -> Result<()> {
         self.list.reset_selection();
-        // This is a normal key that we want to add to the search.
-        self.search_term = format!("{}{}", self.search_term, c);
-
+        self.search_term.push(c);
         self.update_matches();
         self.render()
     }
 
-    pub fn backspace(&mut self) -> Result<()> {
+    fn backspace(&mut self) -> Result<()> {
         self.list.reset_selection();
-        if self.search_term.chars().count() > 0 {
-            self.search_term =
-                String::from(&self.search_term[..self.search_term.chars().count() - 1]);
-            let matcher = SkimMatcherV2::default();
-            for f in &mut self.all_items {
-                f.score = matcher.fuzzy_indices(&f.name, &self.search_term);
-            }
-        }
+        // NB: pop() removes the last char, not the last byte, so this is
+        // safe for multi-byte characters.
+        self.search_term.pop();
         self.update_matches();
         self.render()
     }
 
+    /// Reserves the vertical space we render into. If the cursor is near the
+    /// bottom of the terminal this scrolls everything up to make room.
     fn render_space(&mut self) -> Result<()> {
-        // Drop down so we don't over-write the terminal line that instigated
-        // this run of lk.
-        write!(self.stdout, "{}", termion::cursor::Save).unwrap();
         if self.first {
-            for _ in 0..self.list.lines_to_show {
-                writeln!(self.stdout, " ")?;
-            }
-            self.first = false
+            let padding = "\r\n".repeat(self.list.lines_to_show);
+            write!(self.stdout, "{padding}")?;
+            self.first = false;
         }
-        write!(self.stdout, "{}", termion::cursor::Restore).unwrap();
-
-        Ok(())
-    }
-
-    fn goto_start(&mut self) -> Result<()> {
-        write!(
-            self.stdout,
-            "{}",
-            termion::cursor::Goto(1, self.console_offset - self.positive_space_remaining)
-        )?;
         Ok(())
     }
 
     fn render_items(&mut self) -> Result<()> {
-        self.goto_start()?;
+        self.stdout.queue(MoveTo(0, self.start_row))?;
         for (index, item) in self.list.items.iter().enumerate() {
+            self.stdout
+                .queue(Clear(ClearType::CurrentLine))?
+                .queue(MoveToColumn(0))?;
             if item.is_blank {
-                writeln!(self.stdout, "{}", termion::clear::CurrentLine)?;
+                write!(self.stdout, "\r\n")?;
             } else {
-                let fuzzy_indecies = &item.score.as_ref().unwrap().1;
-
                 // Do some string manipulation to colourise the indexed parts
-                let coloured_line = get_coloured_line(
-                    fuzzy_indecies,
-                    &item.name,
-                    index == self.list.selected_index as usize,
-                );
-
-                writeln!(
-                    self.stdout,
-                    "{}{}{}",
-                    termion::clear::CurrentLine,
-                    // Go maximum left, so we're at the start of the line
-                    termion::cursor::Left(1000),
-                    coloured_line
-                )?;
+                let fuzzy_indices = item.score.as_ref().map_or(&[] as &[usize], |s| &s.1);
+                let coloured_line =
+                    get_coloured_line(fuzzy_indices, &item.name, index == self.list.selected_index);
+                write!(self.stdout, "{coloured_line}\r\n")?;
             }
         }
         Ok(())
     }
 
     fn render_prompt(&mut self) -> Result<()> {
-        // Render the prompt
-        let prompt_y = self.list.lines_to_show as u16 + 1;
-        let current_x = self.search_term.chars().count() + 2;
-
-        // Go to the bottom line, where we'll render the prompt
-        write!(
-            self.stdout,
-            "{CurrentLine}{}{CurrentLine}",
-            termion::cursor::Goto(current_x as u16, prompt_y + self.console_offset),
-        )?;
-        write!(
-            self.stdout,
-            "{Show}{}{BLUE_FG}${RESET_FG} {}",
-            termion::cursor::Goto(1, prompt_y + self.console_offset),
-            self.search_term
-        )?;
+        let prompt_row = self.start_row + self.list.lines_to_show as u16;
+        self.stdout
+            .queue(MoveTo(0, prompt_row))?
+            .queue(Clear(ClearType::CurrentLine))?
+            .queue(Show)?;
+        write!(self.stdout, "{BLUE_FG}${RESET_FG} {}", self.search_term)?;
         self.stdout.flush()?;
         Ok(())
     }
 
-    /// Gets functions that match our current criteria, sorted by score.
-    pub fn update_matches(&mut self) {
-        let matcher = SkimMatcherV2::default();
-        for f in &mut self.all_items {
-            f.score = matcher.fuzzy_indices(&f.name, &self.search_term);
-        }
-        let mut matches = self
-            .all_items
-            .iter()
-            .filter(|f| f.score.is_some())
-            .cloned()
-            .collect::<Vec<Item<T>>>();
-
+    /// Gets items that match our current criteria, sorted by score.
+    fn update_matches(&mut self) {
+        self.matches = rank_items(&mut self.all_items, &self.search_term);
         log::info!(
             "There are a total of {} item(s) and {} match(es)",
             self.all_items.len(),
-            matches.len()
+            self.matches.len()
         );
-
-        // We want these in the order of their fuzzy matched score, i.e. closed matches
-        matches.sort_by(|a, b| b.score.cmp(&a.score));
-        self.matches = matches;
         self.list.update(&self.matches);
     }
 
-    /// Renders the current result set
-    pub fn render(&mut self) -> Result<()> {
+    /// Renders the current result set.
+    fn render(&mut self) -> Result<()> {
         self.render_space()?;
         self.render_items()?;
         self.render_prompt()?;
         Ok(())
     }
 
-    /// The main entry point for the fuzzy finder.
-    pub fn find(items: Vec<Item<T>>, lines_to_show: i8) -> Result<Option<T>> {
-        let mut state = FuzzyFinder::new(items, lines_to_show);
+    /// Clears everything we've rendered and puts the cursor back at the
+    /// start of the rendered area, so the caller's output follows on neatly.
+    fn cleanup(&mut self) -> Result<()> {
+        let end_row = self.start_row + self.list.lines_to_show as u16;
+        for row in self.start_row..=end_row {
+            self.stdout
+                .queue(MoveTo(0, row))?
+                .queue(Clear(ClearType::CurrentLine))?;
+        }
+        self.stdout.queue(MoveTo(0, self.start_row))?.queue(Show)?;
+        self.stdout.flush()?;
+        Ok(())
+    }
+
+    /// The main entry point for the fuzzy finder. Renders the finder,
+    /// blocks until the user selects an item or quits (Esc, ctrl-c or
+    /// ctrl-d), and returns the selection.
+    pub fn find(items: Vec<Item<T>>, lines_to_show: u16) -> Result<Option<T>> {
+        let _raw_mode = RawModeGuard::new()?;
+        let mut state = FuzzyFinder::new(items, lines_to_show)?;
 
         state.update_matches();
-
         state.render()?;
 
-        let mut stdin = termion::async_stdin().keys();
-
-        // Run 'sed -n l' to explore escape codes
-        let mut escaped = String::from("");
-        let mut instant = Instant::now();
-
         loop {
-            // What's going on here? The problem is how we detect escape.
-            // The key presses we're interested in, e.g. the arrows, are all preceded by escape, ^[.
-            // E.g. up is ^[[A and down is ^[[B. So the question is how do we identify an escape
-            // key by itself? If it's ^[[A then that's ^[ followed almost instantly by [A. If we have
-            // ^[ followed by a pause then we know it's not an escape for some other key, but an
-            // escape by itself. That's what the 100 136His below.
-            // NB: some terminals might send these bytes too slowly and escape might not be caught.
-            // NB: some terminals might use different escape keys entirely.
-            if escaped == "^[" && instant.elapsed().as_micros() > 100 {
-                write!(state.stdout, "{}", termion::cursor::Restore)?;
-                break;
+            let Event::Key(key) = read()? else {
+                continue;
+            };
+            // Windows sends both press and release events; only act on press.
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
-
-            if let Some(Ok(key)) = stdin.next() {
-                match key {
-                    // ctrl-c and ctrl-d are two ways to exit.
-                    Key::Ctrl('c') => break,
-                    Key::Ctrl('d') => break,
-
-                    // NB: It'd be neat if we could use Key::Up and Key::Down but they don't
-                    // work in raw mode. So we've got to deal with the escape codes manually.
-
-                    // This captures the enter key
-                    Key::Char('\n') => {
-                        return if !state.matches.is_empty() {
-                            // Tidy up the console lines we've been writing
-                            for _ in state.console_offset
-                                ..state.console_offset + state.list.lines_to_show as u16 + 4
-                            {
-                                write!(state.stdout, "{}", termion::clear::CurrentLine,)?;
-                            }
-                            Ok(Some(
-                                state.list.get_selected().item.as_ref().unwrap().to_owned(),
-                            ))
-                        } else {
-                            Ok(None)
-                        };
-                    }
-                    Key::Char(c) => {
-                        if !escaped.is_empty() {
-                            escaped = format!("{}{}", escaped, c);
-                            match escaped.as_str() {
-                                "^[" => continue,
-                                "^[[" => continue,
-                                "^[[A" => {
-                                    escaped = String::from("");
-                                    state.up()?;
-                                }
-                                "^[[B" => {
-                                    escaped = String::from("");
-                                    state.down()?;
-                                }
-                                _ => {
-                                    // This is nothing we recognise so let's abandon the escape sequence.
-                                    escaped = String::from("");
-                                }
-                            }
-                        } else {
-                            state.append(c)?;
-                        }
-                    }
-                    Key::Esc => {
-                        // All we're doing here is recording that we've entered an escape sequence.
-                        // It's actually handled when we handle chars.
-                        if escaped.is_empty() {
-                            escaped = String::from("^[");
-                            instant = Instant::now();
-                        }
-                    }
-                    Key::Backspace => {
-                        state.backspace()?;
-                    }
-                    _ => {}
+            match key.code {
+                KeyCode::Esc => break,
+                KeyCode::Char('c') | KeyCode::Char('d')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    break;
                 }
-                state.stdout.flush().unwrap();
+                KeyCode::Enter => {
+                    // If there are no matches the selection is a blank,
+                    // and we return None — same as quitting.
+                    let selected = state
+                        .list
+                        .get_selected()
+                        .and_then(|selected| selected.item.clone());
+                    state.cleanup()?;
+                    return Ok(selected);
+                }
+                KeyCode::Up => state.up()?,
+                KeyCode::Down => state.down()?,
+                KeyCode::Backspace => state.backspace()?,
+                KeyCode::Char(c) => state.append(c)?,
+                _ => {}
             }
         }
+
+        state.cleanup()?;
         Ok(None)
     }
 }
 
+/// Scores every item against the search term, and returns the matching
+/// items sorted by score, best match first.
+fn rank_items<T: Clone>(all_items: &mut [Item<T>], search_term: &str) -> Vec<Item<T>> {
+    let matcher = SkimMatcherV2::default();
+    for item in all_items.iter_mut() {
+        item.score = matcher.fuzzy_indices(&item.name, search_term);
+    }
+    let mut matches: Vec<Item<T>> = all_items
+        .iter()
+        .filter(|item| item.score.is_some())
+        .cloned()
+        .collect();
+
+    // We want these in the order of their fuzzy matched score, i.e. closest matches
+    matches.sort_by(|a, b| b.score.cmp(&a.score));
+    matches
+}
+
 /// Highlights the line. Will highlight matching search items, and also indicate
 /// if it's a selected item.
-fn get_coloured_line(fuzzy_indecies: &[usize], text: &str, is_selected: bool) -> String {
+fn get_coloured_line(fuzzy_indices: &[usize], text: &str, is_selected: bool) -> String {
     // Do some string manipulation to colourise the indexed parts
-    let mut coloured_line = String::from("");
+    let mut coloured_line = String::new();
     let mut start = 0;
 
     let text_vec = text.chars().collect::<Vec<_>>();
-    for i in fuzzy_indecies {
-        let part = &text_vec[start..*i].iter().cloned().collect::<String>();
-        let matching_char = &text_vec[*i..*i + 1].iter().cloned().collect::<String>();
+    for i in fuzzy_indices {
+        let part = &text_vec[start..*i].iter().collect::<String>();
+        let matching_char = &text_vec[*i..*i + 1].iter().collect::<String>();
         if is_selected {
             coloured_line = format!(
                 "{coloured_line}{DARK_GREY_BG}{part}{RESET_BG}{DARK_BLUE_BG}{matching_char}{RESET_BG}"
@@ -330,12 +276,9 @@ fn get_coloured_line(fuzzy_indecies: &[usize], text: &str, is_selected: bool) ->
         }
         start = i + 1;
     }
-    let remaining_chars = &text_vec[start..text.chars().count()]
-        .iter()
-        .cloned()
-        .collect::<String>();
+    let remaining_chars = &text_vec[start..text_vec.len()].iter().collect::<String>();
     if is_selected {
-        let prompt: String = format!("{DARK_GREY_BG}{GREEN_FG}>{RESET_FG}{RESET_BG}",);
+        let prompt: String = format!("{DARK_GREY_BG}{GREEN_FG}>{RESET_FG}{RESET_BG}");
         let spacer: String = format!("{DARK_GREY_FG}  {RESET_FG}");
         let remaining: String = format!("{DARK_GREY_BG}{remaining_chars}{RESET_BG}");
         coloured_line = format!("{prompt}{spacer}{coloured_line}{remaining}");
@@ -347,9 +290,87 @@ fn get_coloured_line(fuzzy_indecies: &[usize], text: &str, is_selected: bool) ->
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn items(names: &[&str]) -> Vec<Item<&'static str>> {
+        names
+            .iter()
+            .map(|name| Item::new((*name).to_string(), "payload"))
+            .collect()
+    }
+
+    fn names<T: Clone>(matches: &[Item<T>]) -> Vec<String> {
+        matches.iter().map(|item| item.name.clone()).collect()
+    }
+
     #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn rank_items_empty_search_matches_everything() {
+        let mut all = items(&["alpha", "beta", "gamma"]);
+        let matches = rank_items(&mut all, "");
+        assert_eq!(matches.len(), 3);
+    }
+
+    #[test]
+    fn rank_items_filters_non_matches() {
+        let mut all = items(&["alpha", "beta", "gamma"]);
+        let matches = rank_items(&mut all, "alp");
+        assert_eq!(names(&matches), vec!["alpha"]);
+    }
+
+    #[test]
+    fn rank_items_puts_best_match_first() {
+        let mut all = items(&["some/deep/path/thing", "thing"]);
+        let matches = rank_items(&mut all, "thing");
+        // The exact match should out-score the scattered one.
+        assert_eq!(names(&matches)[0], "thing");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn rank_items_records_match_indices() {
+        let mut all = items(&["abc"]);
+        let matches = rank_items(&mut all, "ac");
+        let (_, indices) = matches[0].score.as_ref().expect("expected a score");
+        assert_eq!(indices, &vec![0, 2]);
+    }
+
+    #[test]
+    fn rank_items_is_case_insensitive_by_default() {
+        let mut all = items(&["Alpha"]);
+        let matches = rank_items(&mut all, "alpha");
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn coloured_line_contains_all_text() {
+        let line = get_coloured_line(&[0, 2], "abc", false);
+        // The characters all survive the colourisation, in order.
+        let stripped: String = line
+            .chars()
+            .filter(|c| "abc".contains(*c) && *c != ' ')
+            .collect();
+        assert_eq!(stripped, "abc");
+    }
+
+    #[test]
+    fn coloured_line_marks_selection() {
+        let unselected = get_coloured_line(&[], "abc", false);
+        let selected = get_coloured_line(&[], "abc", true);
+        assert!(!unselected.contains('>'));
+        assert!(selected.contains('>'));
+    }
+
+    #[test]
+    fn coloured_line_handles_multibyte_characters() {
+        // 'é' is two bytes; the indices are char indices, not byte indices.
+        let line = get_coloured_line(&[1], "éa", false);
+        assert!(line.contains('é'));
+        assert!(line.contains('a'));
+    }
+
+    #[test]
+    fn coloured_line_handles_match_on_last_char() {
+        let line = get_coloured_line(&[2], "abc", false);
+        assert!(line.contains('c'));
     }
 }

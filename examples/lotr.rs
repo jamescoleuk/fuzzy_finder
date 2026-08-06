@@ -2,13 +2,8 @@ use std::fs;
 
 use anyhow::Result;
 use csv::ReaderBuilder;
-use fuzzy_finder::{item::Item, FuzzyFinder};
+use fuzzy_finder::{FuzzyFinder, item::Item};
 use log::LevelFilter;
-use log4rs::{
-    append::file::FileAppender,
-    config::{Appender, Root},
-    encode::pattern::PatternEncoder,
-};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -18,14 +13,9 @@ struct LotrCharacter {
 }
 
 fn main() -> Result<()> {
-    let log_file_path = "./lotr_example.log".to_string();
-    let log_file = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
-        .build(log_file_path)?;
-    let config = log4rs::config::Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(log_file)))
-        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
-    log4rs::init_config(config)?;
+    // The finder owns the terminal while it runs, so log to a file.
+    let log_file = fs::File::create("./lotr_example.log")?;
+    simplelog::WriteLogger::init(LevelFilter::Info, simplelog::Config::default(), log_file)?;
 
     // Get some data to display
     let characters_csv = fs::read_to_string("examples/data/lotr_characters.csv")

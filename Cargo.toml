@@ -2,25 +2,24 @@
 authors = ["James Cole <jamescole.uk@gmail.com>"]
 categories = ["command-line-interface", "command-line-utilities"]
 description = "A fuzzy finding UI for CLI applications written in Rust"
-edition = "2021"
+edition = "2024"
+rust-version = "1.86"
 keywords = ["bash", "cli"]
 license = "MIT OR Apache-2.0"
 name = "fuzzy_finder"
 repository = "https://github.com/jamescoleuk/fuzzy_finder"
-version = "0.4.1"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version = "0.5.0"
 
 [dependencies]
-# TODO: use thiserror instead of anyhow
-anyhow = "1.0.44"
-csv = "1.1"
-fuzzy-matcher = "0.3.7"
-log = "0.4.14"
-pastel_colours = "0.2.0"
-termion = "3.0.0"
+crossterm = "0.29"
+fuzzy-matcher = "0.3"
+log = "0.4"
+pastel_colours = "0.2"
+thiserror = "2"
 
-# Dependencies for the LotR examples
+# Dependencies for the LotR example
 [dev-dependencies]
-log4rs = "1.0.0"
-serde = {version = "1.0.139", features = ["derive"]}
+anyhow = "1.0"
+csv = "1"
+serde = { version = "1.0", features = ["derive"] }
+simplelog = "0.12"
